@@ -1,0 +1,138 @@
+**local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local pGui = player:WaitForChild("PlayerGui")
+
+-- [ 1. สร้าง ScreenGui ]
+local screenGui = Instance.new("ScreenGui", pGui)
+screenGui.Name = "Wiper_Final_V3"
+screenGui.ResetOnSpawn = false
+
+-- [ 2. ปุ่มเปิดเมนู (จะโชว์เมื่อปิดหน้าต่าง) ]
+local openBtn = Instance.new("TextButton", screenGui)
+openBtn.Name = "OpenButton"
+openBtn.Size = UDim2.new(0, 100, 0, 35)
+openBtn.Position = UDim2.new(0, 10, 0.5, 0)
+openBtn.Text = "เปิดเมนู"
+openBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+openBtn.TextColor3 = Color3.new(1, 1, 1)
+openBtn.Visible = false -- เริ่มต้นซ่อนไว้
+openBtn.ZIndex = 10
+
+-- [ 3. หน้าต่างหลัก (Main Frame) ]
+local mainFrame = Instance.new("Frame", screenGui)
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 250, 0, 150)
+mainFrame.Position = UDim2.new(0.5, -125, 0.5, -75)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true -- ทำให้ UI รับ Input ได้ (สำคัญสำหรับการลาก)
+
+-- แถบหัวข้อ (Title Bar) สำหรับลาก UI
+local titleBar = Instance.new("Frame", mainFrame)
+titleBar.Name = "TitleBar"
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+titleBar.BorderSizePixel = 0
+
+local titleText = Instance.new("TextLabel", titleBar)
+titleText.Size = UDim2.new(1, -35, 1, 0)
+titleText.Position = UDim2.new(0, 10, 0, 0)
+titleText.Text = "WIPER (DRAGGABLE)"
+titleText.TextColor3 = Color3.new(1, 1, 1)
+titleText.BackgroundTransparency = 1
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+
+-- ปุ่มปิด (X)
+local closeBtn = Instance.new("TextButton", titleBar)
+closeBtn.Size = UDim2.new(0, 30, 0, 30)
+closeBtn.Position = UDim2.new(1, -30, 0, 0)
+closeBtn.Text = "X"
+closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.BorderSizePixel = 0
+
+-- ปุ่มเริ่ม/หยุด
+local autoBtn = Instance.new("TextButton", mainFrame)
+autoBtn.Size = UDim2.new(0, 200, 0, 50)
+autoBtn.Position = UDim2.new(0.5, -100, 0, 60)
+autoBtn.Text = "เริ่มทำงาน"
+autoBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+autoBtn.TextColor3 = Color3.new(1, 1, 1)
+autoBtn.TextSize = 18
+
+--- [[ ระบบลากหน้าต่าง (Smooth Draggable) ]] ---
+local dragging, dragInput, dragStart, startPos
+
+local function update(input)
+	local delta = input.Position - dragStart
+	mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+titleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = mainFrame.Position
+		
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		update(input)
+	end
+end)
+
+--- [[ ระบบเปิด/ปิด UI ]] ---
+closeBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = false
+	openBtn.Visible = true
+end)
+
+openBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = true
+	openBtn.Visible = false
+end)
+
+--- [[ ระบบ Logic การล้างของ (Hold Only) ]] ---
+local active = false
+local re1 = ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Playe1rTrigge1rEven1t")
+local re2 = ReplicatedStorage:WaitForChild("RE"):WaitForChild("1Clea1rTool1s")
+
+autoBtn.MouseButton1Click:Connect(function()
+	active = not active
+	if active then
+		autoBtn.Text = "หยุดทำงาน"
+		autoBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+	else
+		autoBtn.Text = "เริ่มทำงาน"
+		autoBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	end
+end)
+
+task.spawn(function()
+	while true do
+		if active then
+			for _, p in pairs(Players:GetPlayers()) do
+				if p ~= player and p.Character then
+					local tool = p.Character:FindFirstChildOfClass("Tool")
+					if tool then
+						pcall(function()
+							re1:FireServer("AcceptedToolToServer", tool.Name, p)
+							re2:FireServer("ClearAllTools")
+						end)
+					end
+				end
+			end
+		end
+		task.wait(0.1) -- ความเร็ว 10 รอบต่อวินาที ลื่นๆ ไม่ค้าง
+	end
+end)**

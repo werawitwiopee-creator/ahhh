@@ -1,57 +1,115 @@
 import discord
-from discord.ext import commands, tasks
 import requests
+import asyncio
+import time
 
-# 1. ตั้งค่าพื้นฐาน
-# นำ Token ใหม่ที่ได้จากการ Reset มาใส่ตรงนี้
-TOKEN = 'ใส่_TOKEN_ใหม่ของคุณ_ที่นี่' 
-# ใส่ ID ห้องแชท (เปิด Developer Mode ใน Discord แล้วคลิกขวาที่ห้อง > Copy ID)
-CHANNEL_ID = 123456789012345678 
+# ==========================================
+#              ตั้งค่าตรงนี้
+# ==========================================
+BOT_TOKEN      = "Discord_Bot_Token_ของคุณ"
+CHANNEL_ID     = 123456789012345678
+CHECK_INTERVAL = 60
+# ==========================================
 
 intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents)
+client  = discord.Client(intents=intents)
+seen_ids: set = set()
 
-last_seen_ids = set()
-
-# 2. ฟังก์ชันดึงข้อมูลจาก Roblox API
-def fetch_data():
-    url = "https://apis.roblox.com/creator-marketplace-api/v2/items/search"
-    params = {"category": "Audio", "keyword": "distrokid", "limit": 30}
+# ---------- ดึงรายการเพลงใหม่ ----------
+def fetch_audio_list() -> list:
+    url = "https://catalog.roblox.com/v1/search/items"
+    params = {
+        "category":        "Audio",
+        "sortType":        "3",
+        "limit":           "30",
+        "salesTypeFilter": "1",
+    }
     try:
-        response = requests.get(url, params=params, timeout=10)
-        if response.status_code == 200:
-            return response.json().get("items", [])
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        return r.json().get("data", [])
     except Exception as e:
-        print(f"เกิดข้อผิดพลาดในการเชื่อมต่อ: {e}")
-    return []
+        print(f"[ERROR] fetch_audio_list: {e}")
+        return []
 
-# 3. ลูปตรวจจับเพลงใหม่ทุกๆ 60 วินาที
-@tasks.loop(seconds=60)
-async def check_songs():
-    global last_seen_ids
-    songs = fetch_data()
-    
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel: return
+# ---------- ดึง Thumbnail ----------
+def fetch_thumbnail(asset_id: int) -> str:
+    url = "https://thumbnails.roblox.com/v1/assets"
+    params = {"assetIds": asset_id, "size": "150x150", "format": "Png"}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json().get("data", [])
+        if data:
+            return data[0].get("imageUrl", "")
+    except Exception as e:
+        print(f"[ERROR] fetch_thumbnail: {e}")
+    return ""
 
-    for song in songs:
-        audio_id = str(song['id'])
-        if audio_id not in last_seen_ids:
-            last_seen_ids.add(audio_id)
-            # ถ้าไม่ใช่การรันครั้งแรก ให้ส่งแจ้งเตือน
-            if len(last_seen_ids) > 30: # ป้องกันแจ้งเตือนรัวตอนเปิดบอทใหม่
-                await channel.send(f"🚨 **เพลงใหม่เข้าหน้าร้าน!**\n🎵 ชื่อ: {song['name']}\n🆔 ID: `{audio_id}`")
-                print(f"พบเพลงใหม่: {song['name']}")
+# ---------- สร้าง Embed ----------
+def build_embed(item: dict, thumb_url: str) -> discord.Embed:
+    asset_id     = item["id"]
+    name         = item.get("name", "ไม่มีชื่อ")
+    creator_name = item.get("creatorName", "?")
 
-@bot.event
+    embed = discord.Embed(color=0xffffff)
+    embed.set_author(name=f"👑  New Audio from {creator_name}")
+    embed.title       = name
+    embed.description = f"by **{creator_name}**"
+    embed.url         = f"https://www.roblox.com/catalog/{asset_id}"
+
+    if thumb_url:
+        embed.set_thumbnail(url=thumb_url)
+
+    embed.add_field(name="🆔  Audio ID", value=f"`{asset_id}`", inline=True)
+    embed.add_field(name="🔗  Link",
+                    value=f"[View on Roblox](https://www.roblox.com/catalog/{asset_id})",
+                    inline=True)
+
+    embed.set_footer(text=f"@{creator_name}  •  Audio Monitor",
+                     icon_url="https://www.roblox.com/favicon.ico")
+    embed.timestamp = discord.utils.utcnow()
+    return embed
+
+# ---------- Loop หลัก ----------
+async def monitor_loop():
+    await client.wait_until_ready()
+    channel = client.get_channel(CHANNEL_ID)
+
+    if channel is None:
+        print(f"[ERROR] ไม่เจอ Channel ID: {CHANNEL_ID}")
+        return
+
+    # โหลดเพลงเก่าก่อน
+    for item in fetch_audio_list():
+        seen_ids.add(item["id"])
+    print(f"[READY] โหลดเพลงเก่า {len(seen_ids)} รายการแล้ว")
+
+    while not client.is_closed():
+        await asyncio.sleep(CHECK_INTERVAL)
+        print(f"[CHECK] {time.strftime('%H:%M:%S')} กำลังเช็ค...")
+
+        for item in fetch_audio_list():
+            aid = item["id"]
+            if aid in seen_ids:
+                continue
+
+            seen_ids.add(aid)
+            thumb_url = fetch_thumbnail(aid)
+            embed     = build_embed(item, thumb_url)
+
+            try:
+                await channel.send(embed=embed)
+                print(f"[NEW] {item.get('name')} | ID: {aid}")
+            except discord.HTTPException as e:
+                print(f"[SEND ERROR] {e}")
+
+# ---------- Event ----------
+@client.event
 async def on_ready():
-    print(f'✅ บอท {bot.user} เริ่มทำงานแล้ว! กำลังเฝ้าร้าน...')
-    # โหลดค่าเริ่มต้นป้องกันแจ้งเตือนของเก่า
-    initial = fetch_data()
-    for s in initial:
-        last_seen_ids.add(str(s['id']))
-    check_songs.start()
+    print(f"[BOT] ออนไลน์: {client.user}")
+    client.loop.create_task(monitor_loop())
 
-bot.run(TOKEN)
-
+# ---------- Run ----------
+if __name__ == "__main__":
+    client.run(BOT_TOKEN)

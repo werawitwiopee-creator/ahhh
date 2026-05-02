@@ -7,7 +7,7 @@ import time
 BOT_TOKEN      = "Token_ของคุณ"
 CHANNEL_ID     = 123456789012345678
 CHECK_INTERVAL = 60
-ROBLO_COOKIE   = "_|WARNING:-DO-NOT-SHARE-THIS...ใส่ Cookie ของคุณตรงนี้"
+ROBLO_COOKIE   = "ใส่ Cookie ของคุณตรงนี้"
 # ==========================================
 
 HEADERS = {
@@ -29,12 +29,15 @@ def fetch_audio_list():
                 "sortType":        "3",
                 "limit":           "30",
                 "salesTypeFilter": "1",
+                "creatorName":     "DistrokidOfficial",
             },
             headers=HEADERS,
             timeout=10
         )
         r.raise_for_status()
-        return r.json().get("data", [])
+        data = r.json().get("data", [])
+        print(f"[DEBUG] เจอเพลง {len(data)} รายการ")
+        return data
     except Exception as e:
         print(f"[ERROR] fetch_audio_list: {e}")
         return []
@@ -87,10 +90,12 @@ def build_embed(item, detail, thumb_url):
     if thumb_url:
         embed.set_thumbnail(url=thumb_url)
 
-    embed.add_field(name="🆔 Audio ID",  value=f"`{asset_id}`",          inline=True)
-    embed.add_field(name="⏱ Duration",  value=detail["duration"],        inline=True)
-    embed.add_field(name="🎵 Format",   value=detail["format"],          inline=True)
-    embed.add_field(name="🔗 Link",     value=f"[View on Roblox](https://www.roblox.com/catalog/{asset_id})", inline=False)
+    embed.add_field(name="🆔 Audio ID", value=f"`{asset_id}`",   inline=True)
+    embed.add_field(name="⏱ Duration", value=detail["duration"], inline=True)
+    embed.add_field(name="🎵 Format",  value=detail["format"],   inline=True)
+    embed.add_field(name="🔗 Link",
+                    value=f"[View on Roblox](https://www.roblox.com/catalog/{asset_id})",
+                    inline=False)
     embed.timestamp = discord.utils.utcnow()
     return embed
 
@@ -99,10 +104,10 @@ async def on_message(message):
     if message.author.bot:
         return
     if message.content.lower() == "/check":
-        await message.channel.send("🔍 กำลังเช็คเพลงใหม่...")
+        await message.channel.send("🔍 กำลังเช็คเพลง Distrokid ใหม่...")
         items = fetch_audio_list()
         if not items:
-            await message.channel.send("❌ ดึงข้อมูลไม่ได้")
+            await message.channel.send("❌ ดึงข้อมูลไม่ได้ ลองใหม่อีกครั้ง")
             return
         for item in items:
             detail = fetch_audio_detail(item["id"])

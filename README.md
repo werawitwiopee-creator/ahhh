@@ -1,140 +1,147 @@
-import discord
-import requests
-import asyncio
-import time
+# discord_ytdl_bot.py
+# ติดตั้ง dependencies ก่อน:
+#   pip install discord.py yt-dlp
 
-# ==========================================
-BOT_TOKEN      = "Token_ของคุณ"
-CHANNEL_ID     = 123456789012345678
-CHECK_INTERVAL = 60
-# ==========================================
+import discord
+import yt_dlp
+import os
+import asyncio
+import re
+from pathlib import Path
+
+# ================== ตั้งค่า ==================
+BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"   # ใส่ Token ของบอทตรงนี้
+MAX_FILE_MB = 25                     # Discord free tier จำกัด 25MB (Nitro = 500MB)
+DOWNLOAD_DIR = "./downloads"
+# ============================================
 
 intents = discord.Intents.default()
 intents.message_content = True
-client  = discord.Client(intents=intents)
-seen_ids: set = set()
+client = discord.Client(intents=intents)
 
-def fetch_audio_by_creator(creator_name, limit=30):
-    try:
-        r = requests.get(
-            "https://catalog.roblox.com/v1/search/items",
-            params={
-                "category":        "Audio",
-                "sortType":        "3",
-                "limit":           str(limit),
-                "salesTypeFilter": "1",
-                "creatorName":     creator_name,
-            },
-            timeout=10
-        )
-        r.raise_for_status()
-        data = r.json().get("data", [])
-        print(f"[DEBUG] เจอเพลง {len(data)} รายการจาก {creator_name}")
-        return data
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        return []
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-def fetch_thumbnail(asset_id):
-    try:
-        r = requests.get(
-            "https://thumbnails.roblox.com/v1/assets",
-            params={"assetIds": asset_id, "size": "150x150", "format": "Png"},
-            timeout=10
-        )
-        data = r.json().get("data", [])
-        if data:
-            return data[0].get("imageUrl", "")
-    except:
-        pass
-    return ""
 
-def build_embed(item, thumb_url):
-    asset_id     = item["id"]
-    name         = item.get("name", "ไม่มีชื่อ")
-    creator_name = item.get("creatorName", "?")
+def is_youtube_url(url: str) -> bool:
+    pattern = r"(https?://)?(www\.)?(youtube\.com|youtu\.be)/.+"
+    return bool(re.match(pattern, url))
 
-    embed = discord.Embed(color=0xffffff)
-    embed.set_author(name=f"👑 Audio from {creator_name}")
-    embed.title       = name
-    embed.description = f"by **{creator_name}**"
-    embed.url         = f"https://www.roblox.com/catalog/{asset_id}"
 
-    if thumb_url:
-        embed.set_thumbnail(url=thumb_url)
+async def download_audio(url: str) -> dict:
+    """ดาวน์โหลดเสียงจาก YouTube แล้วคืน path + ข้อมูลเพลง"""
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": f"{DOWNLOAD_DIR}/%(id)s.%(ext)s",
+        "postprocessors": [{
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }],
+        "quiet": True,
+        "no_warnings": True,
+    }
 
-    embed.add_field(name="🆔 Audio ID", value=f"`{asset_id}`", inline=True)
-    embed.add_field(name="🔗 Link",
-                    value=f"[View on Roblox](https://www.roblox.com/catalog/{asset_id})",
-                    inline=True)
-    embed.timestamp = discord.utils.utcnow()
-    return embed
+    loop = asyncio.get_event_loop()
 
-@client.event
-async def on_message(message):
-    if message.author.bot:
-        return
+    def _download():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            video_id = info["id"]
+            title = info.get("title", "Unknown")
+            duration = info.get("duration", 0)
+            uploader = info.get("uploader", "Unknown")
+            mp3_path = f"{DOWNLOAD_DIR}/{video_id}.mp3"
+            return {
+                "path": mp3_path,
+                "title": title,
+                "duration": duration,
+                "uploader": uploader,
+                "video_id": video_id,
+            }
 
-    # !sixseven ชื่อcreator
-    if message.content.lower().startswith("!sixseven "):
-        creator = message.content[10:].strip()
-        if not creator:
-            await message.channel.send("❌ ใส่ชื่อ Creator ด้วยนะครับ เช่น `!sixseven DistrokidOfficial`")
-            return
+    return await loop.run_in_executor(None, _download)
 
-        await message.channel.send(f"🔍 กำลังค้นหาเพลงของ **{creator}**...")
-        items = fetch_audio_by_creator(creator)
 
-        if not items:
-            await message.channel.send(f"❌ ไม่เจอเพลงของ **{creator}** เลยครับ")
-            return
+def format_duration(seconds: int) -> str:
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
-        for item in items:
-            thumb = fetch_thumbnail(item["id"])
-            await message.channel.send(embed=build_embed(item, thumb))
-            await asyncio.sleep(0.5)
-
-        await message.channel.send(f"✅ เจอทั้งหมด **{len(items)}** เพลงของ **{creator}**!")
-
-    # !check
-    elif message.content.lower() == "!check":
-        await message.channel.send("🔍 กำลังเช็คเพลง Distrokid ใหม่...")
-        items = fetch_audio_by_creator("DistrokidOfficial")
-        if not items:
-            await message.channel.send("❌ ดึงข้อมูลไม่ได้")
-            return
-        for item in items:
-            thumb = fetch_thumbnail(item["id"])
-            await message.channel.send(embed=build_embed(item, thumb))
-            await asyncio.sleep(0.5)
-        await message.channel.send(f"✅ เจอทั้งหมด **{len(items)}** เพลง!")
-
-async def monitor_loop():
-    await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
-    if not channel:
-        print("[ERROR] ไม่เจอ Channel")
-        return
-
-    for item in fetch_audio_by_creator("DistrokidOfficial"):
-        seen_ids.add(item["id"])
-    print(f"[READY] โหลดเพลงเก่า {len(seen_ids)} รายการ")
-
-    while not client.is_closed():
-        await asyncio.sleep(CHECK_INTERVAL)
-        print(f"[CHECK] {time.strftime('%H:%M:%S')}")
-        for item in fetch_audio_by_creator("DistrokidOfficial"):
-            aid = item["id"]
-            if aid in seen_ids:
-                continue
-            seen_ids.add(aid)
-            thumb = fetch_thumbnail(aid)
-            await channel.send(embed=build_embed(item, thumb))
-            print(f"[NEW] {item.get('name')} | ID: {aid}")
 
 @client.event
 async def on_ready():
-    print(f"[BOT] ออนไลน์: {client.user}")
-    client.loop.create_task(monitor_loop())
+    print(f"✅ บอท {client.user} พร้อมใช้งานแล้ว!")
+
+
+@client.event
+async def on_message(message: discord.Message):
+    # ไม่ตอบสนองต่อบอทตัวเอง
+    if message.author.bot:
+        return
+
+    content = message.content.strip()
+
+    # ตรวจสอบคำสั่ง !dl
+    if not content.lower().startswith("!dl"):
+        return
+
+    parts = content.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply("❌ ใช้งาน: `!dl <ลิงก์ YouTube>`\nตัวอย่าง: `!dl https://youtu.be/xxxxx`")
+        return
+
+    url = parts[1].strip()
+
+    if not is_youtube_url(url):
+        await message.reply("❌ ลิงก์ไม่ถูกต้อง รองรับเฉพาะ YouTube เท่านั้น")
+        return
+
+    # แจ้งสถานะกำลังดาวน์โหลด
+    status_msg = await message.reply("⏳ กำลังดาวน์โหลด...")
+
+    mp3_path = None
+    try:
+        info = await download_audio(url)
+        mp3_path = info["path"]
+
+        if not os.path.exists(mp3_path):
+            raise FileNotFoundError("ไม่พบไฟล์ MP3 หลังดาวน์โหลด")
+
+        file_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
+
+        if file_size_mb > MAX_FILE_MB:
+            await status_msg.edit(content=(
+                f"❌ ไฟล์ใหญ่เกินไป ({file_size_mb:.1f} MB)\n"
+                f"Discord รองรับสูงสุด {MAX_FILE_MB} MB"
+            ))
+            return
+
+        # สร้าง Embed ข้อมูลเพลง
+        embed = discord.Embed(
+            title="🎵 ดาวน์โหลดสำเร็จ!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="ชื่อเพลง", value=info["title"], inline=False)
+        embed.add_field(name="ช่อง", value=info["uploader"], inline=True)
+        embed.add_field(name="ความยาว", value=format_duration(info["duration"]), inline=True)
+        embed.add_field(name="ขนาดไฟล์", value=f"{file_size_mb:.2f} MB", inline=True)
+        embed.set_footer(text=f"ขอโดย {message.author.display_name}")
+
+        # อัปโหลดไฟล์ไปดิสคอร์ด
+        discord_file = discord.File(mp3_path, filename=f"{info['title'][:80]}.mp3")
+        await status_msg.delete()
+        await message.reply(embed=embed, file=discord_file)
+
+    except yt_dlp.utils.DownloadError as e:
+        await status_msg.edit(content=f"❌ ดาวน์โหลดไม่สำเร็จ: `{e}`")
+
+    except Exception as e:
+        await status_msg.edit(content=f"❌ เกิดข้อผิดพลาด: `{e}`")
+
+    finally:
+        # ลบไฟล์ชั่วคราวหลังส่งแล้ว
+        if mp3_path and os.path.exists(mp3_path):
+            os.remove(mp3_path)
+
 
 client.run(BOT_TOKEN)

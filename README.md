@@ -1,84 +1,57 @@
 import discord
+from discord.ext import commands, tasks
 import requests
-import time
-import asyncio
 
-# ตั้งค่า
-BOT_TOKEN = "TOKEN_ของคุณ"
-CHANNEL_ID = 123456789  # ID ช่องที่จะส่งข้อมูล
-CHECK_INTERVAL = 60     # เช็คทุก 60 วินาที
+# 1. ตั้งค่าพื้นฐาน
+# นำ Token ใหม่ที่ได้จากการ Reset มาใส่ตรงนี้
+TOKEN = 'ใส่_TOKEN_ใหม่ของคุณ_ที่นี่' 
+# ใส่ ID ห้องแชท (เปิด Developer Mode ใน Discord แล้วคลิกขวาที่ห้อง > Copy ID)
+CHANNEL_ID = 123456789012345678 
 
 intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-seen_ids = set()
+intents.message_content = True
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-def get_new_audio():
-    url = "https://catalog.roblox.com/v1/search/items"
-    params = {
-        "category": "Audio",
-        "sortType": "3",
-        "limit": 30,
-        "salesTypeFilter": "1"
-    }
+last_seen_ids = set()
+
+# 2. ฟังก์ชันดึงข้อมูลจาก Roblox API
+def fetch_data():
+    url = "https://apis.roblox.com/creator-marketplace-api/v2/items/search"
+    params = {"category": "Audio", "keyword": "distrokid", "limit": 30}
     try:
-        res = requests.get(url, params=params, timeout=10)
-        res.raise_for_status()
-        return res.json().get("data", [])
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            return response.json().get("items", [])
     except Exception as e:
-        print(f"[Error] {e}")
-        return []
+        print(f"เกิดข้อผิดพลาดในการเชื่อมต่อ: {e}")
+    return []
 
-async def check_loop():
-    await client.wait_until_ready()
-    channel = client.get_channel(CHANNEL_ID)
+# 3. ลูปตรวจจับเพลงใหม่ทุกๆ 60 วินาที
+@tasks.loop(seconds=60)
+async def check_songs():
+    global last_seen_ids
+    songs = fetch_data()
+    
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel: return
 
-    # โหลดครั้งแรก
-    first_batch = get_new_audio()
-    for item in first_batch:
-        seen_ids.add(item["id"])
-    print(f"✅ โหลดข้อมูลเริ่มต้น {len(seen_ids)} รายการ")
+    for song in songs:
+        audio_id = str(song['id'])
+        if audio_id not in last_seen_ids:
+            last_seen_ids.add(audio_id)
+            # ถ้าไม่ใช่การรันครั้งแรก ให้ส่งแจ้งเตือน
+            if len(last_seen_ids) > 30: # ป้องกันแจ้งเตือนรัวตอนเปิดบอทใหม่
+                await channel.send(f"🚨 **เพลงใหม่เข้าหน้าร้าน!**\n🎵 ชื่อ: {song['name']}\n🆔 ID: `{audio_id}`")
+                print(f"พบเพลงใหม่: {song['name']}")
 
-    while not client.is_closed():
-        await asyncio.sleep(CHECK_INTERVAL)
-        items = get_new_audio()
-
-        for item in items:
-            if item["id"] not in seen_ids:
-                seen_ids.add(item["id"])
-
-                audio_id = item["id"]
-                name = item.get("name", "ไม่มีชื่อ")
-                creator = item.get("creatorName", "?")
-
-                # ดึงข้อมูลเพิ่มเติม
-                detail_url = f"https://apis.roblox.com/toolbox-service/v1/items/details?assetIds={audio_id}"
-                duration = "N/A"
-                try:
-                    detail = requests.get(detail_url, timeout=10).json()
-                    duration = detail["data"][0].get("asset", {}).get("duration", "N/A")
-                    if duration != "N/A":
-                        m, s = divmod(int(duration), 60)
-                        duration = f"{m}:{s:02d}"
-                except:
-                    pass
-
-                # สร้าง Embed สวยๆ
-                embed = discord.Embed(
-                    title=f"🎵 New Audio from {creator}",
-                    color=0x9B59B6
-                )
-                embed.add_field(name="📛 ชื่อเพลง", value=name, inline=False)
-                embed.add_field(name="🆔 Audio ID", value=str(audio_id), inline=True)
-                embed.add_field(name="⏱ Duration", value=duration, inline=True)
-                embed.add_field(name="🔗 Links", value=f"[View on Roblox](https://www.roblox.com/catalog/{audio_id})", inline=False)
-                embed.set_footer(text=f"Roblox Audio Monitor")
-
-                await channel.send(embed=embed)
-                print(f"[NEW] {name} | ID: {audio_id}")
-
-@client.event
+@bot.event
 async def on_ready():
-    print(f"✅ บอทออนไลน์: {client.user}")
-    client.loop.create_task(check_loop())
+    print(f'✅ บอท {bot.user} เริ่มทำงานแล้ว! กำลังเฝ้าร้าน...')
+    # โหลดค่าเริ่มต้นป้องกันแจ้งเตือนของเก่า
+    initial = fetch_data()
+    for s in initial:
+        last_seen_ids.add(str(s['id']))
+    check_songs.start()
 
-client.run(BOT_TOKEN)
+bot.run(TOKEN)
+

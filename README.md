@@ -6,12 +6,13 @@ import time
 # ==========================================
 #              ตั้งค่าตรงนี้
 # ==========================================
-BOT_TOKEN      = "Discord_Bot_Token_ของคุณ"
+BOT_TOKEN      = "Token_ของคุณ"
 CHANNEL_ID     = 123456789012345678
 CHECK_INTERVAL = 60
 # ==========================================
 
 intents = discord.Intents.default()
+intents.message_content = True
 client  = discord.Client(intents=intents)
 seen_ids: set = set()
 
@@ -71,7 +72,38 @@ def build_embed(item: dict, thumb_url: str) -> discord.Embed:
     embed.timestamp = discord.utils.utcnow()
     return embed
 
-# ---------- Loop หลัก ----------
+# ---------- ส่งเพลงทั้งหมด ----------
+async def send_audio(channel, items: list):
+    count = 0
+    for item in items:
+        thumb_url = fetch_thumbnail(item["id"])
+        embed     = build_embed(item, thumb_url)
+        try:
+            await channel.send(embed=embed)
+            count += 1
+            await asyncio.sleep(0.5)  # หน่วงนิดนึงไม่ให้ spam เกิน
+        except discord.HTTPException as e:
+            print(f"[SEND ERROR] {e}")
+    return count
+
+# ---------- คำสั่ง !check ----------
+@client.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if message.content.lower() == "!check":
+        await message.channel.send("🔍 กำลังเช็คเพลงใหม่...")
+        items = fetch_audio_list()
+
+        if not items:
+            await message.channel.send("❌ ดึงข้อมูลไม่ได้ ลองใหม่อีกครั้ง")
+            return
+
+        count = await send_audio(message.channel, items)
+        await message.channel.send(f"✅ เจอทั้งหมด **{count}** เพลง!")
+
+# ---------- Loop อัตโนมัติ ----------
 async def monitor_loop():
     await client.wait_until_ready()
     channel = client.get_channel(CHANNEL_ID)
@@ -80,7 +112,6 @@ async def monitor_loop():
         print(f"[ERROR] ไม่เจอ Channel ID: {CHANNEL_ID}")
         return
 
-    # โหลดเพลงเก่าก่อน
     for item in fetch_audio_list():
         seen_ids.add(item["id"])
     print(f"[READY] โหลดเพลงเก่า {len(seen_ids)} รายการแล้ว")
@@ -93,11 +124,9 @@ async def monitor_loop():
             aid = item["id"]
             if aid in seen_ids:
                 continue
-
             seen_ids.add(aid)
             thumb_url = fetch_thumbnail(aid)
             embed     = build_embed(item, thumb_url)
-
             try:
                 await channel.send(embed=embed)
                 print(f"[NEW] {item.get('name')} | ID: {aid}")

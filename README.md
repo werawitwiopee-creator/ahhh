@@ -75,10 +75,11 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    if message.content.lower().startswith("/search "):
-        creator = message.content[8:].strip()
+    # !sixseven ชื่อcreator
+    if message.content.lower().startswith("!sixseven "):
+        creator = message.content[10:].strip()
         if not creator:
-            await message.channel.send("❌ ใส่ชื่อ Creator ด้วยนะครับ เช่น `/search DistrokidOfficial`")
+            await message.channel.send("❌ ใส่ชื่อ Creator ด้วยนะครับ เช่น `!sixseven DistrokidOfficial`")
             return
 
         await message.channel.send(f"🔍 กำลังค้นหาเพลงของ **{creator}**...")
@@ -95,7 +96,8 @@ async def on_message(message):
 
         await message.channel.send(f"✅ เจอทั้งหมด **{len(items)}** เพลงของ **{creator}**!")
 
-    elif message.content.lower() == "/check":
+    # !check
+    elif message.content.lower() == "!check":
         await message.channel.send("🔍 กำลังเช็คเพลง Distrokid ใหม่...")
         items = fetch_audio_by_creator("DistrokidOfficial")
         if not items:

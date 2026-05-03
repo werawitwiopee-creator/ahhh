@@ -1,190 +1,113 @@
-# m.py
-# pip install discord.py yt-dlp
-
 import discord
+import asyncio
 import yt_dlp
 import os
-import asyncio
-import re
-import subprocess
 
-BOT_TOKEN = "ใส่ TOKEN บอทตรงนี้"
-MAX_FILE_MB = 25
-DOWNLOAD_DIR = "./downloads"
-INTRO_PATH = "อ_พโดย191_2_.ogg"
-FFMPEG = "./ffmpeg.exe"
+# ==========================================
+BOT_TOKEN = "Token_ของคุณ"
+# ==========================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-
-
-def is_youtube_url(url):
-    return bool(re.match(r"(https?://)?(www\.)?(youtube\.com|youtu\.be)/.+", url))
-
-
-def format_duration(seconds):
-    m, s = divmod(seconds, 60)
-    h, m = divmod(m, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-
-
-async def download_audio(url):
+def download_audio(url):
     ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": f"{DOWNLOAD_DIR}/%(id)s.%(ext)s",
+        "format":         "bestaudio/best",
+        "outtmpl":        "downloads/%(title)s.%(ext)s",
         "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
+            "key":              "FFmpegExtractAudio",
+            "preferredcodec":   "mp3",
             "preferredquality": "192",
         }],
-        "ffmpeg_location": ".",
         "quiet": True,
-        "no_warnings": True,
     }
-    loop = asyncio.get_event_loop()
-    def _dl():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return {
-                "path": f"{DOWNLOAD_DIR}/{info['id']}.mp3",
-                "title": info.get("title", "Unknown"),
-                "duration": info.get("duration", 0),
-                "uploader": info.get("uploader", "Unknown"),
-            }
-    return await loop.run_in_executor(None, _dl)
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info     = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+        mp3_file = os.path.splitext(filename)[0] + ".mp3"
+        return {
+            "file":     mp3_file,
+            "title":    info.get("title", "audio"),
+            "channel":  info.get("uploader", "?"),
+            "duration": info.get("duration", 0),
+        }
 
+def fmt_duration(secs):
+    m, s = divmod(int(secs), 60)
+    return f"{m}:{s:02d}"
 
-@client.event
-async def on_ready():
-    print(f"✅ บอท {client.user} พร้อมใช้งานแล้ว!")
-    print("คำสั่ง: !dl <ลิงก์> | !kiku + แนบไฟล์")
-
+def fmt_size(path):
+    mb = os.path.getsize(path) / (1024 * 1024)
+    return f"{mb:.1f} MB"
 
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    content = message.content.strip()
-
-    # ===== !dl =====
-    if content.lower().startswith("!dl"):
-        parts = content.split(maxsplit=1)
-        if len(parts) < 2:
-            await message.reply("❌ ใช้งาน: `!dl <ลิงก์ YouTube>`")
+    if message.content.lower().startswith("!dl "):
+        url = message.content[4:].strip()
+        if not url:
+            await message.channel.send("❌ ใส่ลิ้ง YouTube ด้วยนะครับ\nเช่น `!dl https://youtube.com/watch?v=xxxxx`")
             return
 
-        url = parts[1].strip()
-        if not is_youtube_url(url):
-            await message.reply("❌ ลิงก์ไม่ถูกต้อง รองรับเฉพาะ YouTube เท่านั้น")
-            return
+        # สร้างโฟลเดอร์ downloads ถ้าไม่มี
+        os.makedirs("downloads", exist_ok=True)
 
-        status = await message.reply("⏳ กำลังดาวน์โหลด...")
-        try:
-            info = await download_audio(url)
-            mp3_path = info["path"]
-
-            if not os.path.exists(mp3_path):
-                raise FileNotFoundError("ไม่พบไฟล์")
-
-            size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
-            if size_mb > MAX_FILE_MB:
-                await status.edit(content=f"❌ ไฟล์ใหญ่เกินไป ({size_mb:.1f} MB)")
-                return
-
-            embed = discord.Embed(title="🎵 ดาวน์โหลดสำเร็จ!", color=discord.Color.green())
-            embed.add_field(name="ชื่อเพลง", value=info["title"], inline=False)
-            embed.add_field(name="ช่อง", value=info["uploader"], inline=True)
-            embed.add_field(name="ความยาว", value=format_duration(info["duration"]), inline=True)
-            embed.add_field(name="ขนาด", value=f"{size_mb:.2f} MB", inline=True)
-            embed.set_footer(text=f"ขอโดย {message.author.display_name}")
-
-            await status.delete()
-            await message.reply(embed=embed, file=discord.File(mp3_path, filename=f"{info['title'][:80]}.mp3"))
-
-        except yt_dlp.utils.DownloadError as e:
-            await status.edit(content=f"❌ ดาวน์โหลดไม่สำเร็จ: `{e}`")
-        except Exception as e:
-            await status.edit(content=f"❌ เกิดข้อผิดพลาด: `{e}`")
-
-    # ===== !kiku =====
-    elif content.lower().startswith("!kiku"):
-        if not message.attachments:
-            await message.reply("❌ แนบไฟล์เสียงมาด้วยนะครับ")
-            return
-
-        attachment = message.attachments[0]
-        if not attachment.filename.lower().endswith((".mp3", ".wav", ".ogg", ".m4a", ".flac")):
-            await message.reply("❌ รองรับเฉพาะไฟล์เสียงเท่านั้น")
-            return
-
-        status = await message.reply("⏳ กำลังทำ Kiku style...")
-
-        mid = message.id
-        input_path  = f"{DOWNLOAD_DIR}/in_{mid}.ogg"
-        sped_path   = f"{DOWNLOAD_DIR}/sped_{mid}.ogg"
-        output_path = f"{DOWNLOAD_DIR}/out_{mid}.ogg"
-        list_path   = f"{DOWNLOAD_DIR}/list_{mid}.txt"
+        # Embed กำลังดาวน์โหลด
+        embed = discord.Embed(
+            description="⏳ กำลังดาวน์โหลด...",
+            color=0xffffff
+        )
+        embed.set_footer(text="DL BOT • Audio Downloader")
+        msg = await message.channel.send(embed=embed)
 
         try:
-            await attachment.save(input_path)
+            loop   = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, download_audio, url)
 
-            loop = asyncio.get_event_loop()
+            mp3_file = result["file"]
+            title    = result["title"]
+            channel  = result["channel"]
+            duration = fmt_duration(result["duration"])
 
-            def run_ff():
-                # ปรับเร็ว x1.12
-                r1 = subprocess.run([
-                    FFMPEG, "-y", "-i", input_path,
-                    "-filter:a", "asetrate=44100*1.12,aresample=44100",
-                    "-c:a", "libvorbis", "-q:a", "6",
-                    sped_path
-                ], capture_output=True)
-                if r1.returncode != 0:
-                    raise RuntimeError(r1.stderr.decode())
-
-                # เขียน list ต่อ intro + เพลง
-                with open(list_path, "w", encoding="utf-8") as f:
-                    f.write(f"file '{os.path.abspath(INTRO_PATH)}'\n")
-                    f.write(f"file '{os.path.abspath(sped_path)}'\n")
-
-                # concat
-                r2 = subprocess.run([
-                    FFMPEG, "-y",
-                    "-f", "concat", "-safe", "0",
-                    "-i", list_path,
-                    "-c:a", "libvorbis", "-q:a", "6",
-                    output_path
-                ], capture_output=True)
-                if r2.returncode != 0:
-                    raise RuntimeError(r2.stderr.decode())
-
-            await loop.run_in_executor(None, run_ff)
-
-            size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            if size_mb > MAX_FILE_MB:
-                await status.edit(content=f"❌ ไฟล์ใหญ่เกินไป ({size_mb:.1f} MB)")
+            # เช็คขนาดไฟล์
+            size_mb = os.path.getsize(mp3_file) / (1024 * 1024)
+            if size_mb > 25:
+                embed = discord.Embed(
+                    description=f"❌ ไฟล์ใหญ่เกิน 25MB ({size_mb:.1f}MB) ส่งไม่ได้ครับ",
+                    color=0xffffff
+                )
+                await msg.edit(embed=embed)
                 return
 
-            name = os.path.splitext(attachment.filename)[0]
-            embed = discord.Embed(title="🎐 Kiku Style!", color=discord.Color.purple())
-            embed.add_field(name="ไฟล์", value=attachment.filename, inline=False)
-            embed.add_field(name="เอฟเฟกต์", value="Intro + Speed x1.12", inline=True)
-            embed.add_field(name="ขนาด", value=f"{size_mb:.2f} MB", inline=True)
-            embed.set_footer(text=f"ขอโดย {message.author.display_name}")
+            # Embed สำเร็จ
+            embed = discord.Embed(color=0xffffff)
+            embed.set_author(name="▶ YouTube Audio")
+            embed.title       = title
+            embed.description = f"by **{channel}**"
+            embed.add_field(name="🎵 Format",   value="MP3",         inline=True)
+            embed.add_field(name="📻 Quality",  value="192 kbps",    inline=True)
+            embed.add_field(name="⏱ Duration", value=duration,       inline=True)
+            embed.add_field(name="💾 Size",     value=fmt_size(mp3_file), inline=True)
+            embed.set_footer(text="DL BOT • ดาวน์โหลดสำเร็จ ✅")
+            embed.timestamp = discord.utils.utcnow()
 
-            await status.delete()
-            await message.reply(embed=embed, file=discord.File(output_path, filename=f"{name}_kiku.ogg"))
+            await msg.edit(embed=embed)
+            await message.channel.send(
+                file=discord.File(mp3_file)
+            )
 
         except Exception as e:
-            await status.edit(content=f"❌ เกิดข้อผิดพลาด: `{e}`")
+            embed = discord.Embed(
+                description=f"❌ เกิดข้อผิดพลาด: {e}",
+                color=0xffffff
+            )
+            await msg.edit(embed=embed)
 
-        finally:
-            for p in [input_path, sped_path, list_path]:
-                if os.path.exists(p):
-                    os.remove(p)
-
+@client.event
+async def on_ready():
+    print(f"[BOT] ออนไลน์: {client.user}")
 
 client.run(BOT_TOKEN)
